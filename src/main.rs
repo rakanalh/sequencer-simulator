@@ -3,7 +3,7 @@ mod node;
 mod readers;
 mod state_machine;
 use itertools::Itertools;
-use node::Node;
+use node::{Node, StateType};
 use readers::BlockReader;
 
 fn main() -> Result<()> {
@@ -18,7 +18,7 @@ fn main() -> Result<()> {
         // Dispatch sequencer state changes
         let state_changes = get_state_changes(line?);
         for (key, state_change) in state_changes {
-            node.dispatch_sequencer_state_change(key, state_change);
+            node.dispatch_state_change(node::StateType::Sequencer, key, state_change);
         }
         node.publish_sequencer_block(seq_block_reader.block_number)?;
 
@@ -71,8 +71,8 @@ fn apply_da_state_change(
             .expect("REORG should have a block number")
             .parse::<u64>()?;
 
-        node.revert_da_blocks(number_of_blocks_to_revert)?;
-        node.revert_seq_blocks((number_of_blocks_to_revert + 1) * 5)?;
+        node.revert_blocks(StateType::DA, number_of_blocks_to_revert)?;
+        node.revert_blocks(StateType::Sequencer, (number_of_blocks_to_revert + 1) * 5)?;
 
         da_block_reader.block_number -= number_of_blocks_to_revert + 1;
         seq_block_reader.block_number -= (number_of_blocks_to_revert + 1) * 5;
@@ -86,7 +86,7 @@ fn apply_da_state_change(
 
     let state_changes = get_state_changes(line);
     for (key, state_change) in state_changes {
-        node.dispatch_da_state_change(key, state_change);
+        node.dispatch_state_change(node::StateType::DA, key, state_change);
     }
     node.ensure_state_match();
     // The non-finalized DA block is updated.

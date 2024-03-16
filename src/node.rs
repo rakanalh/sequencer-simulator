@@ -2,6 +2,12 @@ use anyhow::{bail, Result};
 
 use crate::state_machine::{Leaves, NodeState, State, StateMachine};
 
+#[derive(Copy, Clone)]
+pub enum StateType {
+    Sequencer,
+    DA,
+}
+
 pub struct Node {
     storage: sled::Db,
     sequencer_state: State,
@@ -19,8 +25,11 @@ impl Node {
         }
     }
 
-    pub fn dispatch_sequencer_state_change(&mut self, key: u8, value: u64) {
-        self.sequencer_state.dispatch(key, value);
+    pub fn dispatch_state_change(&mut self, state_type: StateType, key: u8, value: u64) {
+        match state_type {
+            StateType::Sequencer => self.sequencer_state.dispatch(key, value),
+            StateType::DA => self.da_state.dispatch(key, value),
+        };
     }
 
     pub fn publish_sequencer_block(&mut self, block_number: u64) -> Result<()> {
@@ -37,34 +46,23 @@ impl Node {
         Ok(())
     }
 
-    pub fn revert_seq_blocks(&mut self, number_of_blocks_to_revert: u64) -> Result<()> {
-        let block_number_str: String = std::str::from_utf8(
-            &self
-                .storage
-                .get("seq-current-block")?
-                .expect("Should be set"),
-        )?
-        .into();
-
-        let current_seq_block_number = block_number_str.parse::<u64>()?;
-        let target_block = current_seq_block_number - number_of_blocks_to_revert;
+    pub fn revert_blocks(
+        &mut self,
+        state_type: StateType,
+        number_of_blocks_to_revert: u64,
+    ) -> Result<()> {
+        let current_block_number = self.get_current_block_number(state_type)?;
+        let target_block = current_block_number - number_of_blocks_to_revert;
 
         // Restore leaves to DA state
-        let leaves_str: String = std::str::from_utf8(
-            &self
-                .storage
-                .get(format!("seq-block-{}", target_block))?
-                .expect("Should be set"),
-        )?
-        .into();
-        let leaves: Leaves = serde_json::from_str(&leaves_str)?;
-        self.sequencer_state.override_state(leaves);
+        let leaves: Leaves = self.get_leaves(state_type, target_block)?;
+
+        match state_type {
+            StateType::Sequencer => self.sequencer_state.override_state(leaves),
+            StateType::DA => self.da_state.override_state(leaves),
+        };
 
         Ok(())
-    }
-
-    pub fn dispatch_da_state_change(&mut self, key: u8, value: u64) {
-        self.da_state.dispatch(key, value)
     }
 
     pub fn ensure_state_match(&mut self) {
@@ -81,31 +79,31 @@ impl Node {
         Ok(())
     }
 
-    pub fn revert_da_blocks(&mut self, number_of_blocks_to_revert: u64) -> Result<()> {
-        let block_number_str: String = std::str::from_utf8(
-            &self
-                .storage
-                .get("da-current-block")?
-                .expect("Should be set"),
-        )?
-        .into();
+    pub fn finalize_da_block(&mut self) {}
 
-        let current_da_block_number = block_number_str.parse::<u64>()?;
-        let target_block = current_da_block_number - number_of_blocks_to_revert;
+    fn get_current_block_number(&self, state_type: StateType) -> Result<u64> {
+        let key = match state_type {
+            StateType::DA => "da-current-block",
+            StateType::Sequencer => "seq-current-block",
+        };
+        let block_number_str: String =
+            std::str::from_utf8(&self.storage.get(key)?.expect("Should be set"))?.into();
 
-        // Restore leaves to DA state
+        Ok(block_number_str.parse::<u64>()?)
+    }
+
+    fn get_leaves(&self, state_type: StateType, target_block: u64) -> Result<Leaves> {
+        let key = match state_type {
+            StateType::DA => "da-block",
+            StateType::Sequencer => "seq-block",
+        };
         let leaves_str: String = std::str::from_utf8(
             &self
                 .storage
-                .get(format!("da-block-{}", target_block))?
+                .get(format!("{}-{}", key, target_block))?
                 .expect("Should be set"),
         )?
         .into();
-        let leaves: Leaves = serde_json::from_str(&leaves_str)?;
-        self.da_state.override_state(leaves);
-
-        Ok(())
+        Ok(serde_json::from_str(&leaves_str)?)
     }
-
-    pub fn finalize_da_block(&mut self) {}
 }
