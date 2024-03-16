@@ -14,6 +14,10 @@ pub trait StateMachine {
     fn dispatch(&mut self, key: u8, value: u64);
 }
 
+/// Custom leaves datastructure to allow serialization / deserialization.
+///
+/// This is created as a workaround since the library itself
+/// does not expose this functionality.
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Leaves {
     items: Vec<[u8; 32]>,
@@ -56,6 +60,13 @@ impl State {
     }
 
     pub fn update(&mut self) {
+        // This is somewhat a HACK since rs_merkle does not expose
+        // an interface to modify the leaves or a merkle tree at a given position.
+        // So we have to reconstruct the tree everytime.
+        // This also prevents us from being able to use commit / rollback
+        // functionalith this library provides.
+        // Solution would be to fork the library to allow such
+        // behavior (insert leaf at position).
         let mut updated_tree = MerkleTree::new();
         updated_tree.append(&mut self.leaves.items.clone());
         self.merkle_tree = updated_tree;
