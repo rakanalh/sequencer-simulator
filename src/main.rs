@@ -35,6 +35,8 @@ fn main() -> Result<()> {
         }
     }
 
+    // TODO: Print out the final roots in node state
+
     Ok(())
 }
 
@@ -80,7 +82,7 @@ fn apply_da_state_change(
         // Make sure we have reverted back to a state where the roots between
         // DA and Sequencer are still matching.
         node.ensure_state_match();
-
+        println!("FINISHED REORG");
         return Ok(());
     }
 

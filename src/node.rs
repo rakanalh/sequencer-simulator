@@ -41,6 +41,8 @@ impl Node {
         state_type: StateType,
         number_of_blocks_to_revert: u64,
     ) -> Result<()> {
+        // TODO: Make sure we're not reverting finalized blocks within the range
+        // of [current_block - blocks_to_revert: current_block].
         let current_block_number = self.current_block_number(state_type)?;
         let target_block = current_block_number - number_of_blocks_to_revert;
 
@@ -75,6 +77,8 @@ impl Node {
     }
 
     pub fn finalize_block(&mut self) -> Result<()> {
+        // TODO: Optimize for storage by clearning out blocks prior to the finalized
+        // block, since we cannot revert a finalized block.
         let Some(block_state_root) = self.da_state.root() else {
             bail!("Could not compute DA state root");
         };
