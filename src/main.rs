@@ -20,7 +20,7 @@ fn main() -> Result<()> {
         for (key, state_change) in state_changes {
             node.dispatch_state_change(node::StateType::Sequencer, key, state_change);
         }
-        node.publish_sequencer_block(seq_block_reader.block_number)?;
+        node.trust_block(seq_block_reader.block_number)?;
 
         // After each 5 blocks, publish latest state to DA layer.
         // In this task, we're not actually publishing but more like
@@ -30,8 +30,8 @@ fn main() -> Result<()> {
             apply_da_state_change(&mut node, &mut da_block_reader, &mut seq_block_reader)?;
         }
 
-        if da_block_reader.block_number % 4 == 0 {
-            node.finalize_da_block();
+        if da_block_reader.block_number > 5 && da_block_reader.block_number % 4 == 0 {
+            node.finalize_block()?;
         }
     }
 
@@ -90,7 +90,7 @@ fn apply_da_state_change(
     }
     node.ensure_state_match();
     // The non-finalized DA block is updated.
-    node.update_da_block(da_block_reader.block_number)?;
+    node.publish_block(da_block_reader.block_number)?;
 
     Ok(())
 }

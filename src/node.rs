@@ -32,18 +32,8 @@ impl Node {
         };
     }
 
-    pub fn publish_sequencer_block(&mut self, block_number: u64) -> Result<()> {
-        let Some(block_state_root) = self.sequencer_state.root() else {
-            bail!("Could not compute sequencer state root");
-        };
-        self.node_state.trusted = block_state_root;
-
-        let leaves = serde_json::to_string(&self.sequencer_state.leaves)?;
-        self.storage
-            .insert(format!("seq-block-{}", block_number), leaves.as_str())?;
-        self.storage
-            .insert("seq-current-block", block_number.to_string().as_str())?;
-        Ok(())
+    pub fn ensure_state_match(&mut self) {
+        assert_eq!(self.da_state.root(), self.sequencer_state.root());
     }
 
     pub fn revert_blocks(
@@ -51,7 +41,7 @@ impl Node {
         state_type: StateType,
         number_of_blocks_to_revert: u64,
     ) -> Result<()> {
-        let current_block_number = self.get_current_block_number(state_type)?;
+        let current_block_number = self.current_block_number(state_type)?;
         let target_block = current_block_number - number_of_blocks_to_revert;
 
         // Restore leaves to DA state
@@ -65,23 +55,34 @@ impl Node {
         Ok(())
     }
 
-    pub fn ensure_state_match(&mut self) {
-        assert_eq!(self.da_state.root(), self.sequencer_state.root());
-    }
+    pub fn trust_block(&mut self, block_number: u64) -> Result<()> {
+        let Some(block_state_root) = self.sequencer_state.root() else {
+            bail!("Could not compute sequencer state root");
+        };
 
-    pub fn update_da_block(&mut self, block_number: u64) -> Result<()> {
-        self.node_state.on_da = self.node_state.trusted;
-        let leaves = serde_json::to_string(&self.da_state.leaves)?;
-        self.storage
-            .insert(format!("da-block-{}", block_number), leaves.as_str())?;
-        self.storage
-            .insert("da-current-block", block_number.to_string().as_str())?;
+        // Set trusted Sequencer block
+        self.node_state.trusted = block_state_root;
+
+        self.update_block_storage(StateType::Sequencer, block_number)?;
+
         Ok(())
     }
 
-    pub fn finalize_da_block(&mut self) {}
+    pub fn publish_block(&mut self, block_number: u64) -> Result<()> {
+        self.node_state.on_da = self.node_state.trusted;
+        self.update_block_storage(StateType::DA, block_number)?;
+        Ok(())
+    }
 
-    fn get_current_block_number(&self, state_type: StateType) -> Result<u64> {
+    pub fn finalize_block(&mut self) -> Result<()> {
+        let Some(block_state_root) = self.da_state.root() else {
+            bail!("Could not compute DA state root");
+        };
+        self.node_state.on_da_finalized = block_state_root;
+        Ok(())
+    }
+
+    fn current_block_number(&self, state_type: StateType) -> Result<u64> {
         let key = match state_type {
             StateType::DA => "da-current-block",
             StateType::Sequencer => "seq-current-block",
@@ -105,5 +106,22 @@ impl Node {
         )?
         .into();
         Ok(serde_json::from_str(&leaves_str)?)
+    }
+
+    fn update_block_storage(&mut self, state_type: StateType, block_number: u64) -> Result<()> {
+        let (key, leaves) = match state_type {
+            StateType::DA => ("da", &self.da_state.leaves),
+            StateType::Sequencer => ("seq", &self.sequencer_state.leaves),
+        };
+
+        let leaves = serde_json::to_string(leaves)?;
+        self.storage
+            .insert(format!("{}-block-{}", key, block_number), leaves.as_str())?;
+        self.storage.insert(
+            format!("{}-current-block", key),
+            block_number.to_string().as_str(),
+        )?;
+
+        Ok(())
     }
 }
