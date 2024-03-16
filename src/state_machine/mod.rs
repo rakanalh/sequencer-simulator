@@ -59,25 +59,18 @@ impl State {
         self.merkle_tree = updated_tree;
     }
 
-    pub fn commit(&mut self) {}
-
     pub fn root(&self) -> Option<RootHash> {
         self.merkle_tree.uncommitted_root()
     }
 
     pub fn override_state(&mut self, leaves: Leaves) {
-        self.leaves = leaves
+        self.leaves = leaves;
+        self.update()
     }
 }
 
 impl StateMachine for State {
     fn dispatch(&mut self, key: u8, value: u64) {
-        // println!(
-        //     "Key: {}\nValue: {}\nBytes {:?}",
-        //     key,
-        //     value,
-        //     Sha256::hash(&value.to_be_bytes())
-        // );
         self.leaves.set(key, Sha256::hash(&value.to_be_bytes()));
         self.update();
     }

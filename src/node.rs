@@ -37,27 +37,37 @@ impl Node {
         Ok(())
     }
 
-    pub fn finalize_sequencer_block(&mut self) {}
+    pub fn revert_seq_blocks(&mut self, number_of_blocks_to_revert: u64) -> Result<()> {
+        let block_number_str: String = std::str::from_utf8(
+            &self
+                .storage
+                .get("seq-current-block")?
+                .expect("Should be set"),
+        )?
+        .into();
+
+        let current_seq_block_number = block_number_str.parse::<u64>()?;
+        let target_block = current_seq_block_number - number_of_blocks_to_revert;
+
+        // Restore leaves to DA state
+        let leaves_str: String = std::str::from_utf8(
+            &self
+                .storage
+                .get(format!("seq-block-{}", target_block))?
+                .expect("Should be set"),
+        )?
+        .into();
+        let leaves: Leaves = serde_json::from_str(&leaves_str)?;
+        self.sequencer_state.override_state(leaves);
+
+        Ok(())
+    }
 
     pub fn dispatch_da_state_change(&mut self, key: u8, value: u64) {
         self.da_state.dispatch(key, value)
     }
 
     pub fn ensure_state_match(&mut self) {
-        // println!("DA state root: {}", hex::encode(self.da_state.root()));
-        // println!(
-        //     "Sequencer state root: {}",
-        //     hex::encode(self.da_state.root())
-        // );
-        for (key, value) in self.sequencer_state.leaves.inner().iter().enumerate() {
-            // println!("Current SEQ value: {} {:?}", key, hex::encode(value));
-            // println!(
-            //     "Current DA value: {} {:?}",
-            //     key,
-            //     hex::encode(self.da_state.leaves.get(key as u8))
-            // );
-            assert_eq!(value, &self.da_state.leaves.get(key as u8));
-        }
         assert_eq!(self.da_state.root(), self.sequencer_state.root());
     }
 
@@ -71,7 +81,7 @@ impl Node {
         Ok(())
     }
 
-    pub fn revert_da(&mut self, number_of_blocks_to_revert: u64) -> Result<()> {
+    pub fn revert_da_blocks(&mut self, number_of_blocks_to_revert: u64) -> Result<()> {
         let block_number_str: String = std::str::from_utf8(
             &self
                 .storage
@@ -96,4 +106,6 @@ impl Node {
 
         Ok(())
     }
+
+    pub fn finalize_da_block(&mut self) {}
 }

@@ -27,12 +27,11 @@ fn main() -> Result<()> {
         // verifying that the latest state in the DA block matches the latest
         // in the sequencer state.
         if seq_block_reader.block_number % 5 == 0 {
-            apply_da_state_change(&mut node, &mut da_block_reader, true)?;
+            apply_da_state_change(&mut node, &mut da_block_reader, &mut seq_block_reader)?;
         }
 
-        if da_block_reader.block_number % 5 == 4 {
-            // Finalize block_number - 4 block.
-            node.finalize_sequencer_block();
+        if da_block_reader.block_number % 4 == 0 {
+            node.finalize_da_block();
         }
     }
 
@@ -58,7 +57,7 @@ fn get_state_changes(line: String) -> Vec<(u8, u64)> {
 fn apply_da_state_change(
     node: &mut Node,
     da_block_reader: &mut BlockReader,
-    match_state: bool,
+    seq_block_reader: &mut BlockReader,
 ) -> Result<()> {
     // Read DA block
     let line = da_block_reader.next().expect("Should have a line")?;
@@ -72,11 +71,16 @@ fn apply_da_state_change(
             .expect("REORG should have a block number")
             .parse::<u64>()?;
 
-        node.revert_da(number_of_blocks_to_revert)?;
-        // Immediately apply the next 3 state changes
-        for i in 0..number_of_blocks_to_revert {
-            apply_da_state_change(node, da_block_reader, false)?;
-        }
+        node.revert_da_blocks(number_of_blocks_to_revert)?;
+        node.revert_seq_blocks((number_of_blocks_to_revert + 1) * 5)?;
+
+        da_block_reader.block_number -= number_of_blocks_to_revert + 1;
+        seq_block_reader.block_number -= (number_of_blocks_to_revert + 1) * 5;
+
+        // Make sure we have reverted back to a state where the roots between
+        // DA and Sequencer are still matching.
+        node.ensure_state_match();
+
         return Ok(());
     }
 
@@ -84,11 +88,7 @@ fn apply_da_state_change(
     for (key, state_change) in state_changes {
         node.dispatch_da_state_change(key, state_change);
     }
-    // println!("SEQ BN {}", seq_block_reader.block_number);
-    // println!("DA BN {}", da_block_reader.block_number);
-    if match_state {
-        node.ensure_state_match();
-    }
+    node.ensure_state_match();
     // The non-finalized DA block is updated.
     node.update_da_block(da_block_reader.block_number)?;
 
