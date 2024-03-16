@@ -24,10 +24,12 @@ impl Leaves {
         self.items[key as usize] = value;
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, key: u8) -> [u8; 32] {
         self.items[key as usize]
     }
 
+    #[allow(dead_code)]
     pub fn inner(&self) -> &Vec<[u8; 32]> {
         &self.items
     }
