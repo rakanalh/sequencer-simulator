@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 
 use crate::state_machine::{Leaves, NodeState, State, StateMachine};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum StateType {
     Sequencer,
     DA,
@@ -10,9 +10,9 @@ pub enum StateType {
 
 pub struct Node {
     storage: sled::Db,
-    sequencer_state: State,
-    da_state: State,
-    node_state: NodeState,
+    pub sequencer_state: State,
+    pub da_state: State,
+    pub node_state: NodeState,
 }
 
 impl Node {
@@ -32,8 +32,8 @@ impl Node {
         };
     }
 
-    pub fn ensure_state_match(&mut self) {
-        assert_eq!(self.da_state.root(), self.sequencer_state.root());
+    pub fn is_state_match(&mut self) -> bool {
+        self.da_state.root() == self.sequencer_state.root()
     }
 
     pub fn revert_blocks(

@@ -17,9 +17,7 @@ fn main() -> Result<()> {
     while let Some(line) = seq_block_reader.next() {
         // Dispatch sequencer state changes
         let state_changes = get_state_changes(line?);
-        for (key, state_change) in state_changes {
-            node.dispatch_state_change(node::StateType::Sequencer, key, state_change);
-        }
+        dispatch_state_changes(&mut node, StateType::Sequencer, state_changes);
         node.trust_block(seq_block_reader.block_number)?;
 
         // After each 5 blocks, publish latest state to DA layer.
@@ -27,7 +25,11 @@ fn main() -> Result<()> {
         // verifying that the latest state in the DA block matches the latest
         // in the sequencer state.
         if seq_block_reader.block_number % 5 == 0 {
-            apply_da_state_change(&mut node, &mut da_block_reader, &mut seq_block_reader)?;
+            apply_batch_to_data_availability(
+                &mut node,
+                &mut da_block_reader,
+                &mut seq_block_reader,
+            )?;
         }
 
         if da_block_reader.block_number > 5 && da_block_reader.block_number % 4 == 0 {
@@ -35,7 +37,24 @@ fn main() -> Result<()> {
         }
     }
 
-    // TODO: Print out the final roots in node state
+    println!("Finished execution");
+    println!(
+        "Sequencer root: 0x{}",
+        hex::encode(node.sequencer_state.root().unwrap())
+    );
+    println!("DA root: 0x{}", hex::encode(node.da_state.root().unwrap()));
+    println!(
+        "Last sequencer trusted block: {}",
+        hex::encode(node.node_state.trusted)
+    );
+    println!(
+        "DA non-finalized block: {}",
+        hex::encode(node.node_state.on_da)
+    );
+    println!(
+        "DA finalized block: {}",
+        hex::encode(node.node_state.on_da_finalized)
+    );
 
     Ok(())
 }
@@ -56,7 +75,7 @@ fn get_state_changes(line: String) -> Vec<(u8, u64)> {
     state_changes
 }
 
-fn apply_da_state_change(
+fn apply_batch_to_data_availability(
     node: &mut Node,
     da_block_reader: &mut BlockReader,
     seq_block_reader: &mut BlockReader,
@@ -67,32 +86,69 @@ fn apply_da_state_change(
     // In case of a reorg, we should revert last N DA blocks
     // and last 5*N sequencer blocks.
     if line.starts_with("REORG") {
-        let number_of_blocks_to_revert = line
+        let number_of_blocks_to_reorg = line
             .split_ascii_whitespace()
             .last()
             .expect("REORG should have a block number")
             .parse::<u64>()?;
 
-        node.revert_blocks(StateType::DA, number_of_blocks_to_revert)?;
-        node.revert_blocks(StateType::Sequencer, (number_of_blocks_to_revert + 1) * 5)?;
+        println!("Reorg DA by {} blocks", number_of_blocks_to_reorg);
 
-        da_block_reader.block_number -= number_of_blocks_to_revert + 1;
-        seq_block_reader.block_number -= (number_of_blocks_to_revert + 1) * 5;
+        node.revert_blocks(StateType::DA, number_of_blocks_to_reorg)?;
+        node.revert_blocks(StateType::Sequencer, (number_of_blocks_to_reorg + 1) * 5)?;
+
+        da_block_reader.block_number -= number_of_blocks_to_reorg + 1;
+        seq_block_reader.block_number -= (number_of_blocks_to_reorg + 1) * 5;
+
+        for _ in 0..number_of_blocks_to_reorg {
+            let Some(Ok(line)) = da_block_reader.next() else {
+                panic!("Should have the re-org amount of lines");
+            };
+            let state_changes = get_state_changes(line);
+            for (key, value) in state_changes {
+                node.dispatch_state_change(StateType::DA, key, value);
+                node.dispatch_state_change(StateType::Sequencer, key, value);
+            }
+            for _ in 0..5 {
+                seq_block_reader.block_number += 1;
+                node.trust_block(seq_block_reader.block_number)?;
+            }
+        }
+        node.publish_block(da_block_reader.block_number)?;
 
         // Make sure we have reverted back to a state where the roots between
         // DA and Sequencer are still matching.
-        node.ensure_state_match();
-        println!("FINISHED REORG");
+        assert!(node.is_state_match());
         return Ok(());
     }
 
     let state_changes = get_state_changes(line);
-    for (key, state_change) in state_changes {
-        node.dispatch_state_change(node::StateType::DA, key, state_change);
+    dispatch_state_changes(node, StateType::DA, state_changes.clone());
+
+    if !node.is_state_match() {
+        // Sequencer lied about the state, we should revert the last 5 sequencer blocks.
+        node.revert_blocks(StateType::Sequencer, 5)?;
+        seq_block_reader.block_number -= 5;
+        node.trust_block(seq_block_reader.block_number)?;
+
+        // println!("{:?}", node.sequencer_state.leaves);
+        dispatch_state_changes(node, StateType::Sequencer, state_changes);
+        seq_block_reader.block_number += 5;
+        node.trust_block(seq_block_reader.block_number)?;
+        assert!(node.is_state_match());
     }
-    node.ensure_state_match();
     // The non-finalized DA block is updated.
     node.publish_block(da_block_reader.block_number)?;
 
     Ok(())
+}
+
+pub fn dispatch_state_changes(
+    node: &mut Node,
+    state_type: StateType,
+    state_changes: Vec<(u8, u64)>,
+) {
+    for (key, state_change) in state_changes {
+        node.dispatch_state_change(state_type, key, state_change);
+    }
 }

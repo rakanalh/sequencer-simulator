@@ -18,7 +18,7 @@ pub trait StateMachine {
 ///
 /// This is created as a workaround since the library itself
 /// does not expose this functionality.
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Leaves {
     items: Vec<[u8; 32]>,
 }
