@@ -1,6 +1,17 @@
 use anyhow::{bail, Result};
 
-use crate::state_machine::{Leaves, NodeState, State, StateMachine};
+use crate::state_machine::{FinalizationStatus, Leaves, Roots, State, StateMachine};
+
+pub trait StateProvider {
+    /// Returns the value at the given key, or 0 if the key is not present.
+    /// Returns the finalization status of the value.
+    #[allow(dead_code)]
+    fn get(&self, key: u8) -> (u64, FinalizationStatus);
+    /// Returns the value at block height for the given key,
+    /// or 0 if the key is not present.
+    #[allow(dead_code)]
+    fn get_historical(&self, key: u8, block: u64) -> u64;
+}
 
 #[derive(Copy, Clone, Debug)]
 pub enum StateType {
@@ -50,8 +61,8 @@ impl Node {
         let leaves: Leaves = self.get_leaves(state_type, target_block)?;
 
         match state_type {
-            StateType::Sequencer => self.sequencer_state.override_state(leaves),
-            StateType::DA => self.da_state.override_state(leaves),
+            StateType::Sequencer => self.sequencer_state.override_leaves(leaves),
+            StateType::DA => self.da_state.override_leaves(leaves),
         };
 
         Ok(())
@@ -114,11 +125,11 @@ impl Node {
 
     fn update_block_storage(&mut self, state_type: StateType, block_number: u64) -> Result<()> {
         let (key, leaves) = match state_type {
-            StateType::DA => ("da", &self.da_state.leaves),
-            StateType::Sequencer => ("seq", &self.sequencer_state.leaves),
+            StateType::DA => ("da", self.da_state.leaves()),
+            StateType::Sequencer => ("seq", self.sequencer_state.leaves()),
         };
 
-        let leaves = serde_json::to_string(leaves)?;
+        let leaves = serde_json::to_string(&leaves)?;
         self.storage
             .insert(format!("{}-block-{}", key, block_number), leaves.as_str())?;
         self.storage.insert(
@@ -127,5 +138,27 @@ impl Node {
         )?;
 
         Ok(())
+    }
+}
+
+/// Provide state for Sequencer
+impl StateProvider for Node {
+    #[allow(dead_code)]
+    fn get(&self, key: u8) -> (u64, FinalizationStatus) {
+        let leaf = self.sequencer_state.get(key);
+        (leaf.value, leaf.status)
+    }
+
+    fn get_historical(&self, key: u8, block: u64) -> u64 {
+        let mut state = State::new();
+
+        // Restore leaves to DA state
+        if let Ok(leaves) = self.get_leaves(StateType::Sequencer, block) {
+            state.override_leaves(leaves);
+            let leaf = state.get(key);
+            leaf.value
+        } else {
+            0
+        }
     }
 }
