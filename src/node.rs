@@ -19,11 +19,20 @@ pub enum StateType {
     DA,
 }
 
+// Node structure to maintaining state across sequencer and DA.
 pub struct Node {
+    // DB to store information on blocks.
     storage: sled::Db,
+    // Sequencer state.
     pub sequencer_state: State,
+    // Sequencer block number.
+    pub sequencer_block_number: u64,
+    // DA state.
     pub da_state: State,
-    pub node_state: NodeState,
+    // DA block number.
+    pub da_block_number: u64,
+    // Maintain Merkle roots.
+    pub roots: Roots,
 }
 
 impl Node {
@@ -32,13 +41,18 @@ impl Node {
             storage,
             sequencer_state: State::new(),
             da_state: State::new(),
-            node_state: Default::default(),
+            roots: Default::default(),
+            sequencer_block_number: 0,
+            da_block_number: 0,
         }
     }
 
+    // Submit state changes to either state machines based on state type.
     pub fn dispatch_state_change(&mut self, state_type: StateType, key: u8, value: u64) {
         match state_type {
-            StateType::Sequencer => self.sequencer_state.dispatch(key, value),
+            StateType::Sequencer => {
+                self.sequencer_state.dispatch(key, value);
+            }
             StateType::DA => self.da_state.dispatch(key, value),
         };
     }
@@ -47,43 +61,51 @@ impl Node {
         self.da_state.root() == self.sequencer_state.root()
     }
 
+    // Revert based on DA blocks to revert.
     pub fn revert_blocks(
         &mut self,
         state_type: StateType,
         number_of_blocks_to_revert: u64,
     ) -> Result<()> {
-        // TODO: Make sure we're not reverting finalized blocks within the range
-        // of [current_block - blocks_to_revert: current_block].
-        let current_block_number = self.current_block_number(state_type)?;
+        let current_block_number = self.current_block_number(state_type);
         let target_block = current_block_number - number_of_blocks_to_revert;
 
         // Restore leaves to DA state
-        let leaves: Leaves = self.get_leaves(state_type, target_block)?;
+        let leaves: Leaves = self.leaves_from_storage(state_type, target_block)?;
 
         match state_type {
-            StateType::Sequencer => self.sequencer_state.override_leaves(leaves),
-            StateType::DA => self.da_state.override_leaves(leaves),
+            StateType::Sequencer => {
+                self.sequencer_state.override_leaves(leaves);
+                self.sequencer_block_number = target_block;
+            }
+            StateType::DA => {
+                self.da_state.override_leaves(leaves);
+                self.da_block_number = target_block;
+            }
         };
 
         Ok(())
     }
 
-    pub fn trust_block(&mut self, block_number: u64) -> Result<()> {
+    pub fn trust_block(&mut self) -> Result<()> {
         let Some(block_state_root) = self.sequencer_state.root() else {
             bail!("Could not compute sequencer state root");
         };
 
-        // Set trusted Sequencer block
-        self.node_state.trusted = block_state_root;
+        self.sequencer_block_number += 1;
 
-        self.update_block_storage(StateType::Sequencer, block_number)?;
+        // Set trusted Sequencer block
+        self.roots.trusted = block_state_root;
+
+        self.leaves_to_storage(StateType::Sequencer, self.sequencer_block_number)?;
 
         Ok(())
     }
 
-    pub fn publish_block(&mut self, block_number: u64) -> Result<()> {
-        self.node_state.on_da = self.node_state.trusted;
-        self.update_block_storage(StateType::DA, block_number)?;
+    pub fn publish_block(&mut self) -> Result<()> {
+        self.da_block_number += 1;
+        self.roots.on_da = self.roots.trusted;
+        self.leaves_to_storage(StateType::DA, self.da_block_number)?;
         Ok(())
     }
 
@@ -93,22 +115,18 @@ impl Node {
         let Some(block_state_root) = self.da_state.root() else {
             bail!("Could not compute DA state root");
         };
-        self.node_state.on_da_finalized = block_state_root;
+        self.roots.on_da_finalized = block_state_root;
         Ok(())
     }
 
-    fn current_block_number(&self, state_type: StateType) -> Result<u64> {
-        let key = match state_type {
-            StateType::DA => "da-current-block",
-            StateType::Sequencer => "seq-current-block",
-        };
-        let block_number_str: String =
-            std::str::from_utf8(&self.storage.get(key)?.expect("Should be set"))?.into();
-
-        Ok(block_number_str.parse::<u64>()?)
+    fn current_block_number(&self, state_type: StateType) -> u64 {
+        match state_type {
+            StateType::DA => self.da_block_number,
+            StateType::Sequencer => self.sequencer_block_number,
+        }
     }
 
-    fn get_leaves(&self, state_type: StateType, target_block: u64) -> Result<Leaves> {
+    fn leaves_from_storage(&self, state_type: StateType, target_block: u64) -> Result<Leaves> {
         let key = match state_type {
             StateType::DA => "da-block",
             StateType::Sequencer => "seq-block",
@@ -123,7 +141,7 @@ impl Node {
         Ok(serde_json::from_str(&leaves_str)?)
     }
 
-    fn update_block_storage(&mut self, state_type: StateType, block_number: u64) -> Result<()> {
+    fn leaves_to_storage(&mut self, state_type: StateType, block_number: u64) -> Result<()> {
         let (key, leaves) = match state_type {
             StateType::DA => ("da", self.da_state.leaves()),
             StateType::Sequencer => ("seq", self.sequencer_state.leaves()),
@@ -153,7 +171,7 @@ impl StateProvider for Node {
         let mut state = State::new();
 
         // Restore leaves to DA state
-        if let Ok(leaves) = self.get_leaves(StateType::Sequencer, block) {
+        if let Ok(leaves) = self.leaves_from_storage(StateType::Sequencer, block) {
             state.override_leaves(leaves);
             let leaf = state.get(key);
             leaf.value

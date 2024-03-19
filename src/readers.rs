@@ -4,7 +4,6 @@ use std::{
 };
 
 pub struct BlockReader {
-    pub block_number: u64,
     lines: Lines<BufReader<File>>,
 }
 
@@ -14,13 +13,11 @@ impl BlockReader {
         let reader = BufReader::new(file);
 
         Ok(Self {
-            block_number: 0,
             lines: reader.lines(),
         })
     }
 
     pub fn next(&mut self) -> Option<Result<String>> {
-        self.block_number += 1;
         self.lines.next()
     }
 }

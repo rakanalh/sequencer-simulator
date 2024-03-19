@@ -3,10 +3,20 @@ mod node;
 mod readers;
 mod state_machine;
 use itertools::Itertools;
+use log::{info, warn};
 use node::{Node, StateType};
 use readers::BlockReader;
+use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
 
 fn main() -> Result<()> {
+    TermLogger::init(
+        LevelFilter::Info,
+        Config::default(),
+        TerminalMode::Stdout,
+        ColorChoice::Auto,
+    )
+    .unwrap();
+
     let storage = sled::open("chainway.db")?;
 
     let mut seq_block_reader = BlockReader::new("from_sequencer.txt")?;
@@ -14,46 +24,43 @@ fn main() -> Result<()> {
 
     let mut node = Node::new(storage);
 
+    info!("Started.");
     while let Some(line) = seq_block_reader.next() {
         // Dispatch sequencer state changes
         let state_changes = get_state_changes(line?);
         dispatch_state_changes(&mut node, StateType::Sequencer, state_changes);
-        node.trust_block(seq_block_reader.block_number)?;
+        node.trust_block()?;
+        info!("Sequencer: Trusted block {}", node.sequencer_block_number);
 
         // After each 5 blocks, publish latest state to DA layer.
         // In this task, we're not actually publishing but more like
         // verifying that the latest state in the DA block matches the latest
         // in the sequencer state.
-        if seq_block_reader.block_number % 5 == 0 {
-            apply_batch_to_data_availability(
-                &mut node,
-                &mut da_block_reader,
-                &mut seq_block_reader,
-            )?;
+        if node.sequencer_block_number % 5 == 0 {
+            info!("Sequencer: Publish block {} to DA", node.da_block_number);
+            apply_batch_to_data_availability(&mut node, &mut da_block_reader)?;
         }
 
-        if da_block_reader.block_number > 5 && da_block_reader.block_number % 4 == 0 {
+        if node.da_block_number > 5 && node.da_block_number % 4 == 0 {
+            info!("DA: Finalize block {}", node.da_block_number);
             node.finalize_block()?;
         }
     }
 
-    println!("Finished execution");
-    println!(
+    info!("Finished execution");
+    info!(
         "Sequencer root: 0x{}",
         hex::encode(node.sequencer_state.root().unwrap())
     );
-    println!("DA root: 0x{}", hex::encode(node.da_state.root().unwrap()));
-    println!(
+    info!("DA root: 0x{}", hex::encode(node.da_state.root().unwrap()));
+    info!(
         "Last sequencer trusted block: {}",
-        hex::encode(node.node_state.trusted)
+        hex::encode(node.roots.trusted)
     );
-    println!(
-        "DA non-finalized block: {}",
-        hex::encode(node.node_state.on_da)
-    );
-    println!(
+    info!("DA non-finalized block: {}", hex::encode(node.roots.on_da));
+    info!(
         "DA finalized block: {}",
-        hex::encode(node.node_state.on_da_finalized)
+        hex::encode(node.roots.on_da_finalized)
     );
 
     Ok(())
@@ -78,7 +85,6 @@ fn get_state_changes(line: String) -> Vec<(u8, u64)> {
 fn apply_batch_to_data_availability(
     node: &mut Node,
     da_block_reader: &mut BlockReader,
-    seq_block_reader: &mut BlockReader,
 ) -> Result<()> {
     // Read DA block
     let line = da_block_reader.next().expect("Should have a line")?;
@@ -92,13 +98,10 @@ fn apply_batch_to_data_availability(
             .expect("REORG should have a block number")
             .parse::<u64>()?;
 
-        println!("Reorg DA by {} blocks", number_of_blocks_to_reorg);
+        warn!("Reorg DA by {} blocks", number_of_blocks_to_reorg);
 
         node.revert_blocks(StateType::DA, number_of_blocks_to_reorg)?;
         node.revert_blocks(StateType::Sequencer, (number_of_blocks_to_reorg + 1) * 5)?;
-
-        da_block_reader.block_number -= number_of_blocks_to_reorg + 1;
-        seq_block_reader.block_number -= (number_of_blocks_to_reorg + 1) * 5;
 
         for _ in 0..number_of_blocks_to_reorg {
             let Some(Ok(line)) = da_block_reader.next() else {
@@ -109,12 +112,12 @@ fn apply_batch_to_data_availability(
                 node.dispatch_state_change(StateType::DA, key, value);
                 node.dispatch_state_change(StateType::Sequencer, key, value);
             }
+            // We create 5 consecutive blocks with the same state for 1 DA block.
             for _ in 0..5 {
-                seq_block_reader.block_number += 1;
-                node.trust_block(seq_block_reader.block_number)?;
+                node.trust_block()?;
             }
         }
-        node.publish_block(da_block_reader.block_number)?;
+        node.publish_block()?;
 
         // Make sure we have reverted back to a state where the roots between
         // DA and Sequencer are still matching.
@@ -126,19 +129,19 @@ fn apply_batch_to_data_availability(
     dispatch_state_changes(node, StateType::DA, state_changes.clone());
 
     if !node.is_state_match() {
+        warn!("Sequencer lied, reverting to DA block.");
         // Sequencer lied about the state, we should revert the last 5 sequencer blocks.
         node.revert_blocks(StateType::Sequencer, 5)?;
-        seq_block_reader.block_number -= 5;
-        node.trust_block(seq_block_reader.block_number)?;
 
-        // println!("{:?}", node.sequencer_state.leaves);
         dispatch_state_changes(node, StateType::Sequencer, state_changes);
-        seq_block_reader.block_number += 5;
-        node.trust_block(seq_block_reader.block_number)?;
+        // We create 5 consecutive blocks with the same state for 1 DA block.
+        for _ in 0..5 {
+            node.trust_block()?;
+        }
         assert!(node.is_state_match());
     }
     // The non-finalized DA block is updated.
-    node.publish_block(da_block_reader.block_number)?;
+    node.publish_block()?;
 
     Ok(())
 }
