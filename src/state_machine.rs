@@ -12,7 +12,7 @@ pub trait StateMachine {
 }
 
 /// The leaf's finalization status.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum FinalizationStatus {
     #[default]
     Trusted,
@@ -92,6 +92,22 @@ impl State {
 
     pub fn leaves(&self) -> Leaves {
         self.leaves.clone()
+    }
+
+    pub fn mark_published(&mut self) {
+        for leaf in self.leaves.values_mut() {
+            if leaf.status == FinalizationStatus::Trusted {
+                leaf.status = FinalizationStatus::DaNotFinalized;
+            }
+        }
+    }
+
+    pub fn mark_finalized(&mut self) {
+        for leaf in self.leaves.values_mut() {
+            if leaf.status == FinalizationStatus::DaNotFinalized {
+                leaf.status = FinalizationStatus::DaFinalized;
+            }
+        }
     }
 }
 

@@ -105,7 +105,8 @@ impl Node {
     pub fn publish_block(&mut self) -> Result<()> {
         self.da_block_number += 1;
         self.roots.on_da = self.roots.trusted;
-        self.leaves_to_storage(StateType::DA, self.da_block_number)?;
+        self.sequencer_state.mark_published();
+        self.leaves_to_storage(StateType::Sequencer, self.sequencer_block_number)?;
         Ok(())
     }
 
@@ -115,6 +116,8 @@ impl Node {
         let Some(block_state_root) = self.da_state.root() else {
             bail!("Could not compute DA state root");
         };
+        self.sequencer_state.mark_published();
+        self.leaves_to_storage(StateType::Sequencer, self.sequencer_block_number)?;
         self.roots.on_da_finalized = block_state_root;
         Ok(())
     }
