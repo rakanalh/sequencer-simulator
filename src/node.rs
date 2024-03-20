@@ -107,6 +107,7 @@ impl Node {
         self.roots.on_da = self.roots.trusted;
         self.sequencer_state.mark_published();
         self.leaves_to_storage(StateType::Sequencer, self.sequencer_block_number)?;
+        self.leaves_to_storage(StateType::DA, self.da_block_number)?;
         Ok(())
     }
 
@@ -118,6 +119,7 @@ impl Node {
         };
         self.sequencer_state.mark_published();
         self.leaves_to_storage(StateType::Sequencer, self.sequencer_block_number)?;
+        self.leaves_to_storage(StateType::DA, self.da_block_number)?;
         self.roots.on_da_finalized = block_state_root;
         Ok(())
     }
@@ -153,10 +155,6 @@ impl Node {
         let leaves = serde_json::to_string(&leaves)?;
         self.storage
             .insert(format!("{}-block-{}", key, block_number), leaves.as_str())?;
-        self.storage.insert(
-            format!("{}-current-block", key),
-            block_number.to_string().as_str(),
-        )?;
 
         Ok(())
     }

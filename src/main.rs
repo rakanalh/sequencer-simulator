@@ -42,8 +42,10 @@ fn main() -> Result<()> {
         }
 
         if node.da_block_number > 5 && node.da_block_number % 4 == 0 {
-            info!("DA: Finalize block {}", node.da_block_number);
-            node.finalize_block()?;
+            if node.roots.on_da_finalized != node.da_state.root().expect("Should be set") {
+                info!("DA: Finalize block {}", node.da_block_number);
+                node.finalize_block()?;
+            }
         }
     }
 
